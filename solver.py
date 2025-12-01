@@ -8,7 +8,10 @@ class Solver:
         self.C = None 
 
     def cholesky_decomposition(self):
-        self.A_lower_triang = self.problem.A_2D.copy()
+        if self.problem.A_3D is not None:
+            self.A_lower_triang = self.problem.A_3D.copy()
+        else:
+            self.A_lower_triang = self.problem.A_2D.copy()
         C = np.zeros_like(self.A_lower_triang)
         for i in range(C.shape[0]):
             # print(f"Cholesky step {i+1}/{C.shape[0]}")
@@ -19,15 +22,19 @@ class Solver:
                 self.A_lower_triang[j, i] = C[j, i]
         
         C = np.tril(self.A_lower_triang)
-        print("Cholesky Decomposition Result (Lower Triangular Matrix): \n", C)
-        print(np.round(C@C.T, 2))
+        # print("Cholesky Decomposition Result (Lower Triangular Matrix): \n", C)
+        # print(np.round(C@C.T, 2))
         self.C = C
         return C
             
 
     def solve(self):
         # Forward substitution
-        y = self.problem.b_2D.copy()
+        if self.problem.b_3D is not None:
+            y = self.problem.b_3D.copy()
+        else:
+            y = self.problem.b_2D.copy()
+
         for i in range(len(y)):
             for j in range(i):
                 y[i] -= self.C[i, j] * y[j]
@@ -41,7 +48,7 @@ class Solver:
                 u[i] -= C_T[i, j] * u[j]
             u[i] /= C_T[i, i]
 
-        y_np = np.linalg.solve(self.C, self.problem.b_2D)
-        print(f"Forward step solution y: \n custom solver: {y} \n numpy: {y_np}")
-        print("Solution vector u (custom solver): \n", u)
-        return u.reshape((self.problem.n, self.problem.n))
+        # y_np = np.linalg.solve(self.C, self.problem.b_3D)
+        # print(f"Forward step solution y: \n custom solver: {y} \n numpy: {y_np}")
+        # print("Solution vector u (custom solver): \n", u)
+        return u
