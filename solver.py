@@ -7,6 +7,31 @@ class Solver:
 
         self.C = None 
 
+    def cholesky_decomposition_banded(self):
+        if self.problem.A_3D is not None:
+            self.A_lower_triang = self.problem.A_3D.copy()
+            bandwidth = self.problem.n**2
+        else:
+            self.A_lower_triang = self.problem.A_2D.copy()
+            bandwidth = self.problem.n
+
+        C = np.zeros_like(self.A_lower_triang)
+        
+        for i in range(C.shape[0]):
+            C[i, i] = np.sqrt(self.A_lower_triang[i, i] - np.sum(C[i, max(0, i-bandwidth):i]**2)) # Only sum elements in the band
+            self.A_lower_triang[i, i] = C[i, i]
+
+            j_end = min(C.shape[0], i + bandwidth + 1)
+            for j in range(i+1, j_end):
+                if abs(j - i) <= bandwidth:
+                    C[j, i] = 1/C[i, i] * (self.A_lower_triang[j, i] - np.sum(C[j, max(0, i-bandwidth):i]*C[i, max(0, i-bandwidth):i]))
+                    self.A_lower_triang[j, i] = C[j, i]
+        
+        C = np.tril(self.A_lower_triang)
+       
+        self.C = C
+        return C
+
     def cholesky_decomposition(self):
         if self.problem.A_3D is not None:
             self.A_lower_triang = self.problem.A_3D.copy()
