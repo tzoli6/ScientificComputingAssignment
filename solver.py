@@ -52,6 +52,32 @@ class Solver:
         self.C = C
         return C
             
+    def solve_banded(self):
+        # Forward substitution
+        if self.problem.b_3D is not None:
+            y = self.problem.b_3D.copy()
+            bandwidth = self.problem.n**2
+        else:
+            y = self.problem.b_2D.copy()
+            bandwidth = self.problem.n
+
+        for i in range(len(y)):
+            for j in range(max(0, i-bandwidth), i):
+                y[i] -= self.C[i, j] * y[j]
+            y[i] /= self.C[i, i]
+
+        # Backward substitution
+        u = y.copy()
+        C_T = self.C.T
+        for i in range(len(u)-1, -1, -1):
+            for j in range(i+1, min(len(u), i + bandwidth + 1)):
+                u[i] -= C_T[i, j] * u[j]
+            u[i] /= C_T[i, i]
+
+        # y_np = np.linalg.solve(self.C, self.problem.b_3D)
+        # print(f"Forward step solution y: \n custom solver: {y} \n numpy: {y_np}")
+        # print("Solution vector u (custom solver): \n", u)
+        return u
 
     def solve(self):
         # Forward substitution
