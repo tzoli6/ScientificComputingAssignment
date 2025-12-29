@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 from solver import Solver
+from conjugate_gradient_solver import ConjugateGradientSolver
+from scipy import sparse as sp
 
 
 class PoissonProblem:
@@ -11,6 +13,7 @@ class PoissonProblem:
         # self.boundary_conditions = boundary_conditions
         # self.solution = None
         self.n = n
+        self.h = 1 / (n + 1)
 
         self.A_1D = None
         self.A_2D = None
@@ -19,7 +22,11 @@ class PoissonProblem:
         self.b_2D = None
         self.b_3D = None
 
+        self.cholesky_cpu_time = None
+        self.cholesky_peak_memorie = None
+
         self.solver = Solver(self)
+        # self.solver = ConjugateGradientSolver(self)
         self.f = f
         self.bc = bc
 
@@ -27,68 +34,60 @@ class PoissonProblem:
         A_i = -np.array([1, -2, 1])
 
         # Interior
-        self.A_1D = np.diag(A_i[0]*np.ones(self.n-1), k=-1) + \
-        np.diag(A_i[1]*np.ones(self.n), k=0) + \
-        np.diag(A_i[2]*np.ones(self.n-1), k=1)
+        self.A_1D = sp.diags(A_i[0]*np.ones(self.n-1), offsets=-1) + \
+        sp.diags(A_i[1]*np.ones(self.n), offsets=0) + \
+        sp.diags(A_i[2]*np.ones(self.n-1), offsets=1)
         self.A_1D *= (self.n+1)**2
-        print("1D Problem Matrix A wo bc: \n", self.A_1D)
-
 
     def construct_2d_problem(self):
         if self.A_1D is None:
             print("1D problem not constructed yet. Constructing 1D problem...")
             self.construct_1d_problem()
 
-        self.A_2D = np.kron(np.eye(self.n), self.A_1D) + np.kron(self.A_1D, np.eye(self.n))
+        self.A_2D = sp.kron(sp.eye(self.n), self.A_1D) + sp.kron(self.A_1D, sp.eye(self.n))
 
-        print("2D Problem Matrix A: \n", self.A_2D)
+        # Cholesky decomposition
+        self.C, cpu_time, peak = self.solver.cholesky_decomposition_banded()
+        self.cholesky_cpu_time = cpu_time
+        self.cholesky_peak_memorie = peak
 
-        print(f"A_2D is symmetric: {np.allclose(self.A_2D.T, self.A_2D)}")
-        # print(f"A_2D is positive definite: {np.all(np.linalg.eigvals(self.A_2D) > 0)}")
-        # print(np.linalg.eigvals(self.A_2D))
-        self.C = self.solver.cholesky_decomposition()
-    
+        # Construct righ-hand side vecor
         h = 1 / (self.n + 1)
         x_ticks = np.arange(1, self.n + 1) * h
         y_ticks = np.arange(1, self.n + 1) * h
         x_mesh, y_mesh = np.meshgrid(x_ticks, y_ticks)
 
         self.b_2D = self.f(x_mesh, y_mesh).flatten()
-        print("Initial b values w/o bc: \n", self.b_2D)
-
-        h = 1/(self.n+1)
 
         # Bottom boundary (y=0)
         bc_bottom = self.bc(x_ticks, 0)
-        self.b_2D[0:self.n] += bc_bottom / (h**2)
-
+        self.b_2D[0:self.n] += bc_bottom / (self.h**2)
         # Top boundary (y=1)
         bc_top = self.bc(x_ticks, 1)
-        self.b_2D[-self.n:] += bc_top / (h**2)
-
+        self.b_2D[-self.n:] += bc_top / (self.h**2)
         # Left boundary (x=0)
         bc_left = self.bc(0, y_ticks)
-        self.b_2D[::self.n] += bc_left / (h**2)
-
+        self.b_2D[::self.n] += bc_left / (self.h**2)
         # Right boundary (x=1)
         bc_right = self.bc(1, y_ticks)
-        self.b_2D[self.n-1::self.n] += bc_right / (h**2)
-        print("b values: \n", self.b_2D)
+        self.b_2D[self.n-1::self.n] += bc_right / (self.h**2)
 
     def construct_3d_problem(self):
         if self.A_1D is None:
             print("1D problem not constructed yet. Constructing 1D problem...")
             self.construct_1d_problem()
 
-        self.A_3D = np.kron(np.eye(self.n), np.kron(np.eye(self.n), self.A_1D)) + np.kron(np.kron(np.eye(self.n), self.A_1D), np.eye(self.n)) + np.kron(np.kron(self.A_1D, np.eye(self.n)), np.eye(self.n))
+        self.A_3D = sp.kron(sp.eye(self.n), sp.kron(sp.eye(self.n), self.A_1D)) + sp.kron(sp.kron(sp.eye(self.n), self.A_1D), sp.eye(self.n)) + sp.kron(sp.kron(self.A_1D, sp.eye(self.n)), sp.eye(self.n))
 
-        print("3D Problem Matrix A: \n", self.A_3D.shape)
-        print(f"A_3D is symmetric: {np.allclose(self.A_3D.T, self.A_3D)}")
-        self.C = self.solver.cholesky_decomposition()
-        h = 1 / (self.n + 1)
-        x_ticks = np.arange(1, self.n + 1) * h
-        y_ticks = np.arange(1, self.n + 1) * h
-        z_ticks = np.arange(1, self.n + 1) * h
+        # Cholesky decomposition
+        self.C, cpu_time, peak = self.solver.cholesky_decomposition_banded()
+        self.cholesky_cpu_time = cpu_time
+        self.cholesky_peak_memorie = peak
+
+        # Construct righ-hand side vecor  
+        x_ticks = np.arange(1, self.n + 1) * self.h
+        y_ticks = np.arange(1, self.n + 1) * self.h
+        z_ticks = np.arange(1, self.n + 1) * self.h
         
         y_mesh, z_mesh, x_mesh = np.meshgrid(x_ticks, y_ticks, z_ticks)
 
@@ -96,23 +95,16 @@ class PoissonProblem:
         y_flattened = y_mesh.flatten()
         z_flattened = z_mesh.flatten()
 
-        # print(f"Flattened x {x_mesh.flatten()}")
-        # print(f"Flattened y {y_mesh.flatten()}")
-        # print(f"Flattened z {z_mesh.flatten()}")
-
         self.b_3D = self.f(x_flattened, y_flattened, z_flattened)
-        # print("Initial b values w/o bc: \n", self.b_3D)
-
-        h = 1/(self.n+1)
         
         # z=0
         bc_facet_bottom = self.bc(x_flattened[:self.n*self.n], y_flattened[:self.n*self.n].flatten(), 0.)
-        self.b_3D[:self.n*self.n] += bc_facet_bottom / (h**2)
+        self.b_3D[:self.n*self.n] += bc_facet_bottom / (self.h**2)
         print(f"Z=0 bc correct: {np.all(z_flattened[:self.n*self.n]==0) and len(z_flattened[:self.n*self.n])==self.n**2}")
 
         # z=1
         bc_facet_top = self.bc(x_flattened[self.n**2*(self.n-1):], y_flattened[self.n**2*(self.n-1):], 1.)
-        self.b_3D[self.n**2*(self.n-1):] += bc_facet_top / (h**2)
+        self.b_3D[self.n**2*(self.n-1):] += bc_facet_top / (self.h**2)
         print(f"Z=1 bc correct: {np.all(z_flattened[self.n**2*(self.n-1):]==1)}")
 
         idx_y_0 = np.array([range(k*self.n*self.n, k*self.n*self.n + self.n) for k in range(self.n)]).flatten()
@@ -121,25 +113,23 @@ class PoissonProblem:
         
         # y=0
         bc_bottom = self.bc(x_flattened[idx_y_0], 0., z_flattened[idx_y_0])
-        self.b_3D[idx_y_0] += bc_bottom / (h**2)
+        self.b_3D[idx_y_0] += bc_bottom / (self.h**2)
         print(f"Y=0 bc correct: {np.all(y_flattened[idx_y_0]==0)}")
 
         # y=1
         bc_top = self.bc(x_flattened[idx_y_1], 1., z_flattened[idx_y_1])
-        self.b_3D[idx_y_1] += bc_top / (h**2)
+        self.b_3D[idx_y_1] += bc_top / (self.h**2)
         print(f"Y=1 bc correct: {np.all(y_flattened[idx_y_1]==1)}")
 
         # x=0
         bc_left = self.bc(0., y_flattened[::self.n], z_flattened[::self.n])
-        self.b_3D[::self.n] += bc_left / (h**2)
+        self.b_3D[::self.n] += bc_left / (self.h**2)
         print(f"X=0 bc correct: {np.all(x_flattened[::self.n]==0)}")
 
         # Right boundary (x=1)
         bc_right = self.bc(1, y_flattened[self.n-1::self.n], z_flattened[self.n-1::self.n])
-        self.b_3D[self.n-1::self.n] += bc_right / (h**2)
+        self.b_3D[self.n-1::self.n] += bc_right / (self.h**2)
         print(f"X=1 bc correct: {np.all(x_flattened[self.n-1::self.n]==1)}")
-
-        # print("b values: \n", self.b_3D)
 
     def solve(self):
         # Solve using numpy for verification
@@ -147,7 +137,7 @@ class PoissonProblem:
         # print("Solution vector u (numpy): \n", u)
 
         # Solve using custom solver
-        u = self.solver.solve()
+        u, cpu_time, peak_memory = self.solver.solve_banded()
         
         if self.A_3D is not None:
             h = 1 / (self.n + 1)
@@ -175,7 +165,7 @@ class PoissonProblem:
         print(f"RMS Error: {e_rms}, Infinity Norm Error: {e_infty}")
         self.u = u
 
-        return u, e_rms, e_infty
+        return u, e_rms, e_infty, cpu_time, peak_memory
 
     def plot_solution(self):
         if self.A_2D is not None:
@@ -241,44 +231,3 @@ def bc_3D(x, y, z) -> float:
 # problem.construct_3d_problem()
 # problem.solve()
 # problem.plot_solution()
-
-# solve for a range of grid sizes, save errors, and plot convergence
-ns = list(range(3, 20, 1))
-rms_errors = []
-inf_errors = []
-hs = []
-for n in ns:
-    print(f"Running n={n}")
-    p = PoissonProblem(n, f_example_3D, bc_3D)
-    p.construct_1d_problem()
-    p.construct_3d_problem()
-    try:
-        u, e_rms, e_infty = p.solve()
-    except Exception as err:
-        print(f"solve failed for n={n}: {err}")
-        continue
-    rms_errors.append(e_rms)
-    inf_errors.append(e_infty)
-    hs.append(1.0 / (n + 1))
-
-# save results to a numpy file
-np.savez("convergence_3D.npz", n=np.array(ns[:len(rms_errors)]), h=np.array(hs),
-            e_rms=np.array(rms_errors), e_infty=np.array(inf_errors))
-
-# plot convergence (log-log)
-plt.figure()
-plt.loglog(hs, rms_errors, 'o-', label='RMS error')
-plt.loglog(hs, inf_errors, 's-', label='Infinity error')
-# reference O(h^2) line (scaled to first RMS point)
-if len(hs) >= 1:
-    h_ref = np.array(hs)
-    ref = inf_errors[0] * (h_ref / h_ref[0])**2
-    plt.loglog(h_ref, ref, '--', label='O(h^2) reference')
-plt.gca().invert_xaxis()
-plt.xlabel('h = 1/(n+1)')
-plt.ylabel('Error')
-plt.title('Convergence of Poisson solver')
-plt.legend()
-plt.grid(True, which='both', ls='--')
-plt.savefig('convergence_3D.png', dpi=300, bbox_inches='tight')
-plt.show()

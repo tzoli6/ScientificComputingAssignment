@@ -1,6 +1,8 @@
 
 import numpy as np
-
+import time
+import tracemalloc
+import scipy.sparse as sp
 class Solver:
     def __init__(self, problem):
         self.problem = problem
@@ -8,31 +10,49 @@ class Solver:
         self.C = None 
 
     def cholesky_decomposition_banded(self):
+        print("Starting sparse Cholesky decomposition...")
+
+        tracemalloc.start()
+        start_time = time.process_time()
+        
         if self.problem.A_3D is not None:
-            self.A_lower_triang = self.problem.A_3D.copy()
+            self.A_lower_triang = self.problem.A_3D.copy().tolil()
             bandwidth = self.problem.n**2
         else:
-            self.A_lower_triang = self.problem.A_2D.copy()
+            self.A_lower_triang = self.problem.A_2D.copy().tolil()
             bandwidth = self.problem.n
 
-        C = np.zeros_like(self.A_lower_triang)
+        N = self.A_lower_triang.shape[0]
+        C = sp.lil_matrix((N, N))
         
-        for i in range(C.shape[0]):
-            C[i, i] = np.sqrt(self.A_lower_triang[i, i] - np.sum(C[i, max(0, i-bandwidth):i]**2)) # Only sum elements in the band
-            self.A_lower_triang[i, i] = C[i, i]
+        for i in range(N):
+            i0 = max(0, i-bandwidth)
 
-            j_end = min(C.shape[0], i + bandwidth + 1)
+            # Chace row
+            Ci = C[i, i0:i].toarray()
+            C_ii = np.sqrt(self.A_lower_triang[i, i] - (Ci@Ci.T)[0, 0])
+            C[i, i] = C_ii
+
+            j_end = min(N, i + bandwidth + 1)
+
             for j in range(i+1, j_end):
-                if abs(j - i) <= bandwidth:
-                    C[j, i] = 1/C[i, i] * (self.A_lower_triang[j, i] - np.sum(C[j, max(0, i-bandwidth):i]*C[i, max(0, i-bandwidth):i]))
-                    self.A_lower_triang[j, i] = C[j, i]
-        
-        C = np.tril(self.A_lower_triang)
-       
+                C_ji = C[j, i0:i].toarray()
+                C_ji = (self.A_lower_triang[j, i] - (C_ji@Ci.T)[0, 0]) / C_ii
+                C[j, i] = C_ji
+    
         self.C = C
-        return C
 
-    def cholesky_decomposition(self):
+        cpu_time = time.process_time() - start_time
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        print(f"Sparse Cholesky decomposition completed in {cpu_time:.4f} seconds, peak memory usage: {peak / 10**6:.4f} MB")
+
+        return C, cpu_time, peak
+    
+    def cholesky_decomposition_dense(self):
+        tracemalloc.start()
+        start_time = time.process_time()
         if self.problem.A_3D is not None:
             self.A_lower_triang = self.problem.A_3D.copy()
         else:
@@ -50,9 +70,23 @@ class Solver:
         # print("Cholesky Decomposition Result (Lower Triangular Matrix): \n", C)
         # print(np.round(C@C.T, 2))
         self.C = C
-        return C
+
+        cpu_time = time.process_time() - start_time
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        return C, cpu_time, peak
             
     def solve_banded(self):
+
+        print("Starting banded solver...")
+
+        tracemalloc.start()
+        start_time = time.process_time()
+
+        if sp.issparse(self.C):
+            self.C = self.C.tocsr()
+
         # Forward substitution
         if self.problem.b_3D is not None:
             y = self.problem.b_3D.copy()
@@ -69,17 +103,30 @@ class Solver:
         # Backward substitution
         u = y.copy()
         C_T = self.C.T
+        if sp.issparse(C_T):
+            C_T = C_T.tocsr()
+        
         for i in range(len(u)-1, -1, -1):
             for j in range(i+1, min(len(u), i + bandwidth + 1)):
                 u[i] -= C_T[i, j] * u[j]
             u[i] /= C_T[i, i]
 
+        cpu_time = time.process_time() - start_time
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
         # y_np = np.linalg.solve(self.C, self.problem.b_3D)
         # print(f"Forward step solution y: \n custom solver: {y} \n numpy: {y_np}")
         # print("Solution vector u (custom solver): \n", u)
-        return u
+
+        print(f"Banded solver completed in {cpu_time:.4f} seconds, peak memory usage: {peak / 10**6:.4f} MB")
+
+        return u, cpu_time, peak
 
     def solve(self):
+        tracemalloc.start()
+        start_time = time.process_time()
+
         # Forward substitution
         if self.problem.b_3D is not None:
             y = self.problem.b_3D.copy()
@@ -102,4 +149,9 @@ class Solver:
         # y_np = np.linalg.solve(self.C, self.problem.b_3D)
         # print(f"Forward step solution y: \n custom solver: {y} \n numpy: {y_np}")
         # print("Solution vector u (custom solver): \n", u)
-        return u
+
+        cpu_time = time.process_time() - start_time
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        return u, cpu_time, peak
