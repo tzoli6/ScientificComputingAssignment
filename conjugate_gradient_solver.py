@@ -133,7 +133,76 @@ class ConjugateGradientSolver:
         print(f"Incomplete Cholesky completed in {cpu_time:.4f} seconds, peak memory usage: {peak / 10**6:.4f} MB")
 
         return self.C, cpu_time, peak
-        
+
+    def incomplete_cholesky_decomposition_banded_faster(self):
+        print("Starting faster incomplete Cholesky decomposition...")
+
+        tracemalloc.start()
+        start_time = time.process_time()
+
+        if self.problem.A_3D is not None:
+            A = self.problem.A_3D.tocsr()
+        else:
+            A = self.problem.A_2D.tocsr()
+
+        N = A.shape[0]
+        C = sp.lil_matrix((N, N))
+
+        for i in range(N):
+            row_start = A.indptr[i]
+            row_end = A.indptr[i + 1]
+            cols = A.indices[row_start:row_end]
+            vals = A.data[row_start:row_end]
+
+            # Diagonal
+            diag = A[i, i]
+
+            for idx, j in enumerate(cols):
+                if j >= i:
+                    continue
+
+                lij = C[i, j]
+                diag -= lij * lij
+
+            if diag <= 0.0:
+                raise RuntimeError(f"Non-positive pivot at row {i}")
+
+            C_ii = np.sqrt(diag)
+            C[i, i] = C_ii
+
+            # Off-diagonals
+            for idx, j in enumerate(cols):
+                if j <= i:
+                    continue
+
+                aji = A[j, i]
+                if aji == 0:
+                    continue
+
+                s = 0.0
+                row_j_start = C.rows[j]
+                row_j_data = C.data[j]
+
+                for k_idx, k in enumerate(row_j_start):
+                    if k >= i:
+                        break
+                    s += row_j_data[k_idx] * C[i, k]
+
+                C[j, i] = (aji - s) / C_ii
+
+        C = C.tocsr()
+
+        cpu_time = time.process_time() - start_time
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        print(
+            f"Incomplete Cholesky completed in {cpu_time:.4f} seconds, "
+            f"peak memory usage: {peak / 10**6:.4f} MB"
+        )
+
+        return C, cpu_time, peak
+
     def solve(self, A, b, M=None, u0=None):
         """
         Solve the linear system Ax = b using the Conjugate Gradient method.
@@ -145,10 +214,6 @@ class ConjugateGradientSolver:
         Returns:
         x  (numpy array): Approximate solution to the system.
         """
-
-        tracemalloc.start()
-        start_time = time.process_time()
-
 
         f_h_squared = b.T @ b
         print(f"Initial residual norm squared: {f_h_squared}")
@@ -162,10 +227,15 @@ class ConjugateGradientSolver:
             # M = np.eye(A.shape[0]) 
             C, cpu_time, peak_memory = self.incomplete_cholesky_decomposition_banded_faster()
             M = C
+
+        tracemalloc.start()
+        start_time = time.process_time()
+        
         # 0 th iteration
         u = u0
         r = b - A @ u
-        z = sp.linalg.spsolve(C, r)
+        y = sp.linalg.spsolve_triangular(C, r, lower=True)
+        z = sp.linalg.spsolve_triangular(C.T, y, lower=False)
         p = z.copy()
 
         for i in range(self.max_iter):
@@ -174,7 +244,8 @@ class ConjugateGradientSolver:
             u = u + alpha * p
 
             r1 = r - alpha*A @ p
-            z1 = sp.linalg.spsolve(M, r1)
+            y1 = sp.linalg.spsolve_triangular(C, r1, lower=True)
+            z1 = sp.linalg.spsolve_triangular(C.T, y1, lower=False)
 
             beta = r1.dot(z1)/r.dot(z)
             p = z1 + beta*p
