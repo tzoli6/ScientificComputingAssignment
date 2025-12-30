@@ -3,11 +3,13 @@ import numpy as np
 import time
 import tracemalloc
 import scipy.sparse as sp
+from scipy.sparse.csgraph import reverse_cuthill_mckee
+
 class Solver:
     def __init__(self, problem):
         self.problem = problem
 
-        self.C = None 
+        self.C = None
 
     def cholesky_decomposition_banded(self):
         print("Starting sparse Cholesky decomposition...")
@@ -155,3 +157,4 @@ class Solver:
         tracemalloc.stop()
 
         return u, cpu_time, peak
+

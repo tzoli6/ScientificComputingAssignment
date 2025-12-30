@@ -198,3 +198,76 @@ class ConjugateGradientSolver:
         print(f"Conjugate Gradient completed in {cpu_time:.4f} seconds, peak memory usage: {peak / 10**6:.4f} MB")
 
         return u, cpu_time, peak
+
+    def solve_ic_bim(self, A, b, u0=None):
+        """
+        Solve A u = b using IC as a basic iterative method (defect–correction form).
+
+        Uses an incomplete Cholesky factor C (A ≈ C C^T) and, at each iteration,
+        solves C C^T e = r and updates u <- u + e until
+            ||r||_2 / ||b||_2 <= tol
+        or max_iter is reached.
+
+        Returns:
+            u         : approximate solution
+            cpu_time  : CPU time (process_time) for the whole IC-BIM solve
+            peak      : peak memory (via tracemalloc)
+        """
+
+        tracemalloc.start()
+        start_time = time.process_time()
+
+        # Ensure b is a flat numpy array
+        b = np.asarray(b).flatten()
+        n = b.shape[0]
+
+        # Initial guess
+        if u0 is None:
+            u = np.zeros_like(b)
+        else:
+            u = np.asarray(u0).flatten().copy()
+
+        # Build incomplete Cholesky factor C only once
+        C, ic_cpu_time, ic_peak = self.incomplete_cholesky_decomposition_banded_faster()
+
+        # Precompute norm of right-hand side for relative residual
+        b_norm2 = b.dot(b)
+        if b_norm2 == 0.0:
+            # Trivial case: solution is zero
+            tracemalloc.stop()
+            self.error_history = [0.0]
+            return u, 0.0, 0.0
+
+        self.error_history = []
+
+        for k in range(self.max_iter):
+            # Residual r = b - A u
+            r = b - A @ u
+
+            rel_res = np.sqrt(r.dot(r) / b_norm2)
+            self.error_history.append(rel_res)
+
+            # Check stopping criterion ||r|| / ||b|| <= tol
+            if rel_res <= self.tol:
+                print(f"IC-BIM converged in {k} iterations, rel. residual = {rel_res:.3e}")
+                break
+
+            # Solve C C^T e = r:
+            #   C y = r
+            #   C^T e = y
+            y = sp.linalg.spsolve(C, r)
+            e = sp.linalg.spsolve(C.T, y)
+
+            # Update iterate
+            u = u + e
+
+        if k == self.max_iter - 1 and rel_res > self.tol:
+            print("IC-BIM: maximum iterations reached without full convergence.")
+
+        cpu_time = time.process_time() - start_time
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        print(f"IC-BIM completed in {cpu_time:.4f} seconds, peak memory usage: {peak / 10 ** 6:.4f} MB")
+
+        return u, cpu_time, peak
