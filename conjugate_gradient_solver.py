@@ -2,6 +2,7 @@ import scipy.sparse as sp
 import numpy as np
 import time
 import tracemalloc
+from sksparse.cholmod import cholesky
 
 class ConjugateGradientSolver:
     def __init__(self, problem, tol=1e-10, max_iter=10000):
@@ -202,8 +203,43 @@ class ConjugateGradientSolver:
         )
 
         return C, cpu_time, peak
+    
+    def cholesky_decomposition_cholmod(self, mode='supernodal'):
+        print("Starting CHOLMOD Cholesky decomposition...")
 
-    def solve(self, A, b, M=None, u0=None):
+        tracemalloc.start()
+        start_time = time.process_time()
+
+        if self.problem.A_3D is not None:
+            A = self.problem.A_3D.tocsc()
+        else:
+            A = self.problem.A_2D.tocsc()
+
+        # Compute Cholesky factorization
+        factor = cholesky(A, mode=mode, ordering_method='best')
+        L_perm = factor.L()
+        P = factor.P()
+    
+        # Create permutation matrix
+        P_inv = np.argsort(P)
+        L_perm_csr = L_perm.tocsr()
+        
+        # Permute rows
+        L_unperm = L_perm_csr[P_inv, :]
+        # Permute columns
+        L_unperm = L_unperm[:, P_inv]
+        
+        L = L_unperm.tocsr()
+
+        cpu_time = time.process_time() - start_time
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        print(f"CHOLMOD Cholesky completed in {cpu_time:.4f} seconds, "f"peak memory: {peak / 10**6:.4f} MB.")
+
+        return L, cpu_time, peak
+    
+    def solve(self, M=None, u0=None):
         """
         Solve the linear system Ax = b using the Conjugate Gradient method.
 
@@ -214,6 +250,12 @@ class ConjugateGradientSolver:
         Returns:
         x  (numpy array): Approximate solution to the system.
         """
+        if self.problem.A_3D is not None:
+            A = self.problem.A_3D.tocsc()
+            b = self.problem.b_3D
+        else:
+            A = self.problem.A_2D.tocsc()
+            b = self.problem.b_2D
 
         f_h_squared = b.T @ b
         print(f"Initial residual norm squared: {f_h_squared}")
@@ -224,9 +266,7 @@ class ConjugateGradientSolver:
             u0 = sp.csr_matrix((n, 1)).toarray().flatten()
 
         if M is None:
-            # M = np.eye(A.shape[0]) 
-            C, cpu_time, peak_memory = self.incomplete_cholesky_decomposition_banded_faster()
-            M = C
+            L, cpu_time, peak_memory = self.cholesky_decomposition_cholmod()
 
         tracemalloc.start()
         start_time = time.process_time()
@@ -234,8 +274,8 @@ class ConjugateGradientSolver:
         # 0 th iteration
         u = u0
         r = b - A @ u
-        y = sp.linalg.spsolve_triangular(C, r, lower=True)
-        z = sp.linalg.spsolve_triangular(C.T, y, lower=False)
+        y = sp.linalg.spsolve_triangular(L, r, lower=True)
+        z = sp.linalg.spsolve_triangular(L.T, y, lower=False)
         p = z.copy()
 
         for i in range(self.max_iter):
@@ -244,8 +284,8 @@ class ConjugateGradientSolver:
             u = u + alpha * p
 
             r1 = r - alpha*A @ p
-            y1 = sp.linalg.spsolve_triangular(C, r1, lower=True)
-            z1 = sp.linalg.spsolve_triangular(C.T, y1, lower=False)
+            y1 = sp.linalg.spsolve_triangular(L, r1, lower=True)
+            z1 = sp.linalg.spsolve_triangular(L.T, y1, lower=False)
 
             beta = r1.dot(z1)/r.dot(z)
             p = z1 + beta*p
@@ -253,12 +293,13 @@ class ConjugateGradientSolver:
             r = r1
             z = z1
 
-            if r.dot(r)/f_h_squared < self.tol**2:
-                print(r.dot(r)/f_h_squared)
+            error = np.sqrt(r.dot(r)/f_h_squared)
+            if error < self.tol**2:
+                print(error)
                 print(f"Converged in {i+1} iterations.")
                 break
 
-            self.error_history.append(np.sqrt(r.dot(r)/f_h_squared))
+            self.error_history.append(error)
 
         if i == self.max_iter - 1:
             print("Maximum iterations reached without convergence.")
