@@ -25,11 +25,11 @@ for n in ns:
 
     rms_errors.append(e_rms)
     inf_errors.append(e_infty)
-    iteration_errors.append(p.solver.error_history)
+    iteration_errors.append(p.solver_cg.error_history)
     direct_solver_cpu_times.append(cpu_time)
     cholesky_cpu_times.append(p.cholesky_cpu_time)  
     peak_memories.append(peak_memory)
-    hs.append(1.0 / (n + 1))
+    hs.append(1.0 / n)
 
     # save results to a numpy file after each iteration
     np.savez(f"convergence_3D_cg.npz", 

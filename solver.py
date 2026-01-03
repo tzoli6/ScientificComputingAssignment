@@ -30,16 +30,22 @@ class Solver:
         for i in range(N):
             i0 = max(0, i-bandwidth)
 
-            # Chace row
-            Ci = C[i, i0:i].toarray()
-            C_ii = np.sqrt(self.A_lower_triang[i, i] - (Ci@Ci.T)[0, 0])
+            # Cache row
+            Ci = C[i, i0:i].toarray().ravel()
+            sum_diag = 0.0
+            for k in range(len(Ci)):
+                sum_diag += Ci[k] ** 2
+            C_ii = np.sqrt(self.A_lower_triang[i, i] - sum_diag)
             C[i, i] = C_ii
 
             j_end = min(N, i + bandwidth + 1)
 
             for j in range(i+1, j_end):
-                C_ji = C[j, i0:i].toarray()
-                C_ji = (self.A_lower_triang[j, i] - (C_ji@Ci.T)[0, 0]) / C_ii
+                C_ji_vec = C[j, i0:i].toarray().ravel()
+                sum_offdiag = 0.0
+                for k in range(len(C_ji_vec)):
+                    sum_offdiag += C_ji_vec[k] * Ci[k]
+                C_ji = (self.A_lower_triang[j, i] - sum_offdiag) / C_ii
                 C[j, i] = C_ji
     
         self.C = C
@@ -56,21 +62,32 @@ class Solver:
         tracemalloc.start()
         start_time = time.process_time()
         if self.problem.A_3D is not None:
-            self.A_lower_triang = self.problem.A_3D.copy()
+            self.A_lower_triang = self.problem.A_3D.copy().toarray()
+            bandwidth = self.problem.n**2
         else:
-            self.A_lower_triang = self.problem.A_2D.copy()
+            self.A_lower_triang = self.problem.A_2D.copy().toarray()
+            bandwidth = self.problem.n
+
         C = np.zeros_like(self.A_lower_triang)
         for i in range(C.shape[0]):
-            # print(f"Cholesky step {i+1}/{C.shape[0]}")
-            C[i, i] = np.sqrt(self.A_lower_triang[i, i] - np.sum(C[i, :i]**2))
+            i0 = max(0, i-bandwidth)
+            # Compute sum sequentially for diagonal
+            sum_diag = 0.0
+            for k in range(i0, i):
+                sum_diag += C[i, k] ** 2
+            C[i, i] = np.sqrt(self.A_lower_triang[i, i] - sum_diag)
             self.A_lower_triang[i, i] = C[i, i]
-            for j in range(i+1, C.shape[0]):
-                C[j, i] = 1/C[i, i] * (self.A_lower_triang[j, i]-np.sum(C[j, :i]*C[i, :i]))
+
+            j_end = min(C.shape[0], i + bandwidth + 1)
+            for j in range(i+1, j_end):
+                # Compute sum sequentially for off-diagonal
+                sum_offdiag = 0.0
+                for k in range(i0, i):
+                    sum_offdiag += C[j, k] * C[i, k]
+                C[j, i] = 1/C[i, i] * (self.A_lower_triang[j, i] - sum_offdiag)
                 self.A_lower_triang[j, i] = C[j, i]
         
         C = np.tril(self.A_lower_triang)
-        # print("Cholesky Decomposition Result (Lower Triangular Matrix): \n", C)
-        # print(np.round(C@C.T, 2))
         self.C = C
 
         cpu_time = time.process_time() - start_time
@@ -104,7 +121,7 @@ class Solver:
 
         return self.C, cpu_time, peak  
 
-    def cholesky_decomposition_sparse(self):
+    def cholesky_decomposition_sparse_fast(self):
         print("Starting sparse Cholesky decomposition...")
 
         tracemalloc.start()
@@ -183,7 +200,7 @@ class Solver:
 
         return u, cpu_time, peak
     
-    def solve_banded(self):
+    def solve_sparse(self):
         print("Starting banded solver...")
 
         tracemalloc.start()
@@ -201,13 +218,9 @@ class Solver:
             bandwidth = self.problem.n
 
         for i in range(len(y)):
-            i_start = max(0, i-bandwidth)
-            # ONLY CHANGE: extract row once, use np.dot
-            if i > i_start:
-                C_row = self.C[i, i_start:i].toarray().ravel()
-                y[i] = (y[i] - np.dot(C_row, y[i_start:i])) / self.C[i, i]
-            else:
-                y[i] /= self.C[i, i]
+            for j in range(max(0, i-bandwidth), i):
+                y[i] -= self.C[i, j] * y[j]
+            y[i] /= self.C[i, i]
 
         # Backward substitution
         u = y.copy()
@@ -216,51 +229,14 @@ class Solver:
             C_T = C_T.tocsr()
         
         for i in range(len(u)-1, -1, -1):
-            i_end = min(len(u), i + bandwidth + 1)
-            # ONLY CHANGE: extract row once, use np.dot
-            if i_end > i + 1:
-                C_T_row = C_T[i, i+1:i_end].toarray().ravel()
-                u[i] = (u[i] - np.dot(C_T_row, u[i+1:i_end])) / C_T[i, i]
-            else:
-                u[i] /= C_T[i, i]
+            for j in range(i+1, min(len(u), i + bandwidth + 1)):
+                u[i] -= C_T[i, j] * u[j]
+            u[i] /= C_T[i, i]
 
         cpu_time = time.process_time() - start_time
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
 
         print(f"Banded solver completed in {cpu_time:.4f} seconds, peak memory usage: {peak / 10**6:.4f} MB")
-
-        return u, cpu_time, peak
-
-    def solve(self):
-        tracemalloc.start()
-        start_time = time.process_time()
-
-        # Forward substitution
-        if self.problem.b_3D is not None:
-            y = self.problem.b_3D.copy()
-        else:
-            y = self.problem.b_2D.copy()
-
-        for i in range(len(y)):
-            for j in range(i):
-                y[i] -= self.C[i, j] * y[j]
-            y[i] /= self.C[i, i]
-
-        # Backward substitution
-        u = y.copy()
-        C_T = self.C.T
-        for i in range(len(u)-1, -1, -1):
-            for j in range(i+1, len(u)):
-                u[i] -= C_T[i, j] * u[j]
-            u[i] /= C_T[i, i]
-
-        # y_np = np.linalg.solve(self.C, self.problem.b_3D)
-        # print(f"Forward step solution y: \n custom solver: {y} \n numpy: {y_np}")
-        # print("Solution vector u (custom solver): \n", u)
-
-        cpu_time = time.process_time() - start_time
-        _, peak = tracemalloc.get_traced_memory()
-        tracemalloc.stop()
 
         return u, cpu_time, peak

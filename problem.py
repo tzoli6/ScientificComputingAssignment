@@ -173,7 +173,7 @@ class PoissonProblem:
         self.cholesky_peak_memorie = peak
 
         # Solve using custom solver
-        u, cpu_time, peak_memory = self.solver.solve_banded()
+        u, cpu_time, peak_memory = self.solver.solve_sparse()
         
         if self.A_3D is not None:
             h = 1 / (self.n + 1)
@@ -216,7 +216,7 @@ class PoissonProblem:
         self.cholesky_peak_memorie = peak
 
         # Solve using custom solver15
-        u, cpu_time, peak_memory = self.solver.solve_banded()
+        u, cpu_time, peak_memory = self.solver.solve_sparse()
         
         if self.A_3D is not None:
             h = 1 / (self.n + 1)
