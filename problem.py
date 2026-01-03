@@ -26,7 +26,7 @@ class PoissonProblem:
         self.cholesky_peak_memorie = None
 
         self.solver = Solver(self)
-        self.solver = ConjugateGradientSolver(self)
+        self.solver_cg = ConjugateGradientSolver(self)
         self.f = f
         self.bc = bc
 
@@ -41,7 +41,6 @@ class PoissonProblem:
 
     def construct_2d_problem(self):
         if self.A_1D is None:
-            print("1D problem not constructed yet. Constructing 1D problem...")
             self.construct_1d_problem()
 
         self.A_2D = sp.kron(sp.eye(self.n), self.A_1D) + sp.kron(self.A_1D, sp.eye(self.n))
@@ -190,6 +189,49 @@ class PoissonProblem:
             u_exact = self.bc(x_flattened, y_flattened, z_flattened)
         else:
             h = 1 / (self.n + 1)
+            # x_ticks = np.arange(1, self.n + 1) * h
+            # y_ticks = np.arange(1, self.n + 1) * h
+            x_ticks = np.linspace(self.h, 1 - self.h, self.n)
+            y_ticks = np.linspace(self.h, 1 - self.h, self.n)
+            x_mesh, y_mesh = np.meshgrid(x_ticks, y_ticks)
+
+            u_exact = self.bc(x_mesh, y_mesh).flatten()
+
+        e_rms = np.sqrt(np.mean((u - u_exact)**2))
+        e_infty = np.max(np.abs(u - u_exact))
+
+        print(f"RMS Error: {e_rms}, Infinity Norm Error: {e_infty}")
+        self.u = u
+
+        return u, e_rms, e_infty, cpu_time, peak_memory
+
+    def direct_solve_dense(self):
+        # Solve using numpy for verification
+        # u = np.linalg.solve(self.A_3D, self.b_3D)
+        # print("Solution vector u (numpy): \n", u)
+
+        # Cholesky decomposition
+        self.C, cpu_time, peak = self.solver.cholesky_decomposition_dense()
+        self.cholesky_cpu_time = cpu_time
+        self.cholesky_peak_memorie = peak
+
+        # Solve using custom solver15
+        u, cpu_time, peak_memory = self.solver.solve_banded()
+        
+        if self.A_3D is not None:
+            h = 1 / (self.n + 1)
+            x_ticks = np.arange(1, self.n + 1) * h
+            y_ticks = np.arange(1, self.n + 1) * h
+            z_ticks = np.arange(1, self.n + 1) * h
+            
+            y_mesh, z_mesh, x_mesh = np.meshgrid(x_ticks, y_ticks, z_ticks)
+
+            x_flattened = x_mesh.flatten()
+            y_flattened = y_mesh.flatten()
+            z_flattened = z_mesh.flatten()
+            u_exact = self.bc(x_flattened, y_flattened, z_flattened)
+        else:
+            h = 1 / (self.n + 1)
             x_ticks = np.arange(1, self.n + 1) * h
             y_ticks = np.arange(1, self.n + 1) * h
             x_mesh, y_mesh = np.meshgrid(x_ticks, y_ticks)
@@ -243,7 +285,7 @@ class PoissonProblem:
 
     def cg_solve(self, tol=1e-8, max_iter=1000):
 
-        u, cpu_time, peak_memory = self.solver.solve(self.A_2D, self.b_2D)
+        u, cpu_time, peak_memory = self.solver_cg.solve()
         
         if self.A_3D is not None:
             h = 1 / (self.n + 1)
