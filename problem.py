@@ -316,30 +316,50 @@ class PoissonProblem:
         return u, e_rms, e_infty, cpu_time, peak_memory
     
     def plot_solution(self):
+        import matplotlib as mpl
+        mpl.rcParams.update({'font.size': 16, 'axes.titlesize': 16, 'axes.labelsize': 16, 'xtick.labelsize': 16, 'ytick.labelsize': 16, 'legend.fontsize': 16})
         if self.A_2D is not None:
             # 2D case
             u_reshaped = self.u.reshape((self.n, self.n))
             x = np.linspace(0, 1, self.n)
             y = np.linspace(0, 1, self.n)
+            x = np.linspace(self.h, 1 - self.h, self.n)
+            y = np.linspace(self.h, 1 - self.h, self.n)
             X, Y = np.meshgrid(x, y)
+
+            x_ticks = np.linspace(0, 1, 5)
+            y_ticks = np.linspace(0, 1, 5)
 
             u_exact = self.bc(X, Y)
 
-            plt.figure(figsize=(10, 8))
+            error = self.u - u_exact.flatten()
+            error_reshaped = error.reshape((self.n, self.n))
+
+            plt.figure(figsize=(12, 10))
             plt.subplot(1, 3, 1)
-            sns.heatmap(u_reshaped, xticklabels=np.round(x, 2), yticklabels=np.round(y, 2), cmap='viridis', cbar_kws={'label': 'u'})
-            plt.title('Simulated Solution')
+            sns.heatmap(u_reshaped, xticklabels=np.round(x_ticks, 2), yticklabels=np.round(y_ticks, 2), cmap='viridis', cbar_kws={'label': 'u'}, annot=False)
+            plt.xticks(ticks=np.linspace(0, self.n-1, len(x_ticks)), labels=np.round(x_ticks, 2), fontsize=16)
+            plt.yticks(ticks=np.linspace(0, self.n-1, len(y_ticks)), labels=np.round(y_ticks, 2), fontsize=16)
+            plt.title('Numerical Solution', fontsize=20)
+            plt.ylabel('y', fontsize=18)
+            plt.xlabel('x', fontsize=18)
             
             plt.subplot(1, 3, 2)
-            sns.heatmap(u_exact, xticklabels=np.round(x, 2), yticklabels=np.round(y, 2), cmap='viridis', cbar_kws={'label': 'u'})
-            plt.title('Exact Solution')
+            sns.heatmap(u_exact, xticklabels=np.round(x_ticks, 2), yticklabels=np.round(y_ticks, 2), cmap='viridis', cbar_kws={'label': 'u'}, annot=False)
+            plt.xticks(ticks=np.linspace(0, self.n-1, len(x_ticks)), labels=np.round(x_ticks, 2), fontsize=16)
+            plt.yticks(ticks=np.linspace(0, self.n-1, len(y_ticks)), labels=np.round(y_ticks, 2), fontsize=16)
+            plt.title('Exact Solution', fontsize=20)
+            plt.xlabel('x', fontsize=18)
             
             plt.subplot(1, 3, 3)
-            sns.heatmap(u_reshaped - u_exact, xticklabels=np.round(x, 2), yticklabels=np.round(y, 2), cmap='viridis', cbar_kws={'label': 'error'})
-            plt.title('Error')
-            plt.suptitle('Solution to Poisson Problem')
-            plt.xlabel('x')
-            plt.ylabel('y')
+            sns.heatmap(error_reshaped, xticklabels=np.round(x_ticks, 2), yticklabels=np.round(y_ticks, 2), cmap='viridis', cbar_kws={'label': '$||r^m||_2 / ||f^h||_2$'}, annot=False)
+            plt.xticks(ticks=np.linspace(0, self.n-1, len(x_ticks)), labels=np.round(x_ticks, 2), fontsize=16)
+            plt.yticks(ticks=np.linspace(0, self.n-1, len(y_ticks)), labels=np.round(y_ticks, 2), fontsize=16)
+            plt.title('$H_\infty$ Error', fontsize=20)
+            plt.xlabel('x', fontsize=18)
+
+            plt.tight_layout()
+            plt.savefig('poisson_2D_solution.png', dpi=300)
             plt.show()
         else:
             # 3D case - plot slices
@@ -356,9 +376,24 @@ class PoissonProblem:
 
             u_exact = self.bc(x_flattened, y_flattened, z_flattened)
             
-            plt.plot(u_exact)
-            plt.plot(self.u)
-            
+            sns.set_theme(style="darkgrid", palette="viridis")
+            fig, axs = plt.subplots(2, 1, figsize=(12, 10), gridspec_kw={'height_ratios': [2, 1]}, sharex=True)
+            # First plot: Numerical vs Exact
+            sns.lineplot(ax=axs[0], x=np.arange(len(u_exact)), y=u_exact, label='Exact', linewidth=2, linestyle='-', color=sns.color_palette('viridis', as_cmap=True)(0.2))
+            sns.lineplot(ax=axs[0], x=np.arange(len(self.u)), y=self.u, label='Numerical', linewidth=1.5, linestyle='--', color=sns.color_palette('viridis', as_cmap=True)(0.8))
+            # axs[0].set_xlabel('Index', fontsize=16)  # Remove individual xlabel
+            axs[0].set_ylabel('u', fontsize=16)
+            axs[0].legend(fontsize=16)
+            axs[0].grid(True, which='both', linestyle='--', color='gray', alpha=0.5)
+
+            # Second plot: Error (gray colormap)
+            error = self.u - u_exact
+            sns.lineplot(ax=axs[1], x=np.arange(len(error)), y=error, color='gray', linewidth=2)
+            axs[1].set_xlabel('I(i,j,k)', fontsize=16)
+            axs[1].set_ylabel('$||u^h-u^h_{ex}||_\infty$', fontsize=16)
+            axs[1].ticklabel_format(axis='y', style='sci', scilimits=(0,0))
+            axs[1].grid(True, which='both', linestyle='--', color='gray', alpha=0.5)
+
             plt.tight_layout()
             plt.show()
 
