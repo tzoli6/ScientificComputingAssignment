@@ -25,6 +25,10 @@ class PoissonProblem:
         self.cholesky_cpu_time = None
         self.cholesky_peak_memorie = None
 
+        # For IC-BIM timing (factorisation and iteration)
+        self.ic_cpu_time = None
+        self.ic_peak_memory = None
+
         self.solver = Solver(self)
         self.solver_cg = ConjugateGradientSolver(self)
         self.f = f
@@ -314,7 +318,66 @@ class PoissonProblem:
         self.u = u
 
         return u, e_rms, e_infty, cpu_time, peak_memory
-    
+
+    def ic_bim_solve(self, tol=1e-10, max_iter=10000):
+        """
+        Solve the Poisson problem using incomplete Cholesky as a
+        basic iterative method (IC-BIM).
+
+        Returns
+        -------
+        u : numpy.ndarray
+            Approximate solution vector.
+        e_rms : float
+            RMS error versus the exact solution.
+        e_infty : float
+            Infinity norm of the error versus the exact solution.
+        cpu_time : float
+            CPU time (s) for the IC-BIM iteration.
+        peak_memory : float
+            Peak memory usage (bytes) during IC-BIM iteration.
+        """
+        # Configure tolerance / max iterations for this run
+        self.solver_cg.tol = tol
+        self.solver_cg.max_iter = max_iter
+
+        # Build incomplete Cholesky factor once and store its timing
+        L, cpu_ic, peak_ic = self.solver_cg.incomplete_cholesky_decomposition_banded_faster()
+        self.ic_cpu_time = cpu_ic
+        self.ic_peak_memory = peak_ic
+
+        # Run IC-BIM iteration using that factor
+        u, cpu_iter, peak_iter = self.solver_cg.solve_ic_bim(L=L)
+
+        # Compute exact solution on the grid for error measurement
+        if self.A_3D is not None:
+            h = 1.0 / (self.n + 1)
+            x_ticks = np.arange(1, self.n + 1) * h
+            y_ticks = np.arange(1, self.n + 1) * h
+            z_ticks = np.arange(1, self.n + 1) * h
+
+            y_mesh, z_mesh, x_mesh = np.meshgrid(x_ticks, y_ticks, z_ticks)
+            x_flat = x_mesh.flatten()
+            y_flat = y_mesh.flatten()
+            z_flat = z_mesh.flatten()
+            u_exact = self.bc(x_flat, y_flat, z_flat)
+        else:
+            h = 1.0 / (self.n + 1)
+            x_ticks = np.arange(1, self.n + 1) * h
+            y_ticks = np.arange(1, self.n + 1) * h
+            x_mesh, y_mesh = np.meshgrid(x_ticks, y_ticks)
+            u_exact = self.bc(x_mesh, y_mesh).flatten()
+
+        e_rms = np.sqrt(np.mean((u - u_exact) ** 2))
+        e_infty = np.max(np.abs(u - u_exact))
+
+        print(f"IC-BIM RMS Error: {e_rms}, Infinity Norm Error: {e_infty}")
+
+        self.u = u
+
+        # cpu_iter is the iteration time (factorisation time is self.ic_cpu_time)
+        return u, e_rms, e_infty, cpu_iter, peak_iter
+
     def plot_solution(self):
         import matplotlib as mpl
         mpl.rcParams.update({'font.size': 16, 'axes.titlesize': 16, 'axes.labelsize': 16, 'xtick.labelsize': 16, 'ytick.labelsize': 16, 'legend.fontsize': 16})
@@ -414,3 +477,4 @@ def bc_3D(x, y, z) -> float:
 # problem.construct_3d_problem()
 # problem.solve()
 # problem.plot_solution()
+

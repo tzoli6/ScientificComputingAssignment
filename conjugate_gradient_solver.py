@@ -2,7 +2,7 @@ import scipy.sparse as sp
 import numpy as np
 import time
 import tracemalloc
-from sksparse.cholmod import cholesky
+#from sksparse.cholmod import cholesky
 
 class ConjugateGradientSolver:
     def __init__(self, problem, tol=1e-10, max_iter=10000):
@@ -238,7 +238,99 @@ class ConjugateGradientSolver:
         print(f"CHOLMOD Cholesky completed in {cpu_time:.4f} seconds, "f"peak memory: {peak / 10**6:.4f} MB.")
 
         return L, cpu_time, peak
-    
+
+    def solve_ic_bim(self, L=None, u0=None):
+        """
+        Solve A u = b using the incomplete Cholesky factorisation as a
+        basic iterative method (defect–correction iteration).
+
+        Parameters
+        ----------
+        L : scipy.sparse matrix or None
+            Lower triangular incomplete Cholesky factor. If None, it is
+            computed using incomplete_cholesky_decomposition_banded_faster().
+        u0 : numpy.ndarray or None
+            Initial guess. If None, the zero vector is used.
+
+        Returns
+        -------
+        u : numpy.ndarray
+            Approximate solution.
+        cpu_time : float
+            CPU time (seconds) for the iterative part.
+        peak : float
+            Peak memory usage (bytes) during the iterative phase.
+        """
+        # Select the correct system (2D vs 3D)
+        if self.problem.A_3D is not None:
+            A = self.problem.A_3D.tocsr()
+            b = self.problem.b_3D
+        else:
+            A = self.problem.A_2D.tocsr()
+            b = self.problem.b_2D
+
+        n = b.shape[0]
+
+        # Initial guess
+        if u0 is None:
+            u = np.zeros_like(b)
+        else:
+            u = u0.copy()
+
+        # Denominator of relative residual
+        f_h_squared = float(b.T @ b)
+
+        # Build incomplete Cholesky factor if not supplied
+        if L is None:
+            L, _, _ = self.incomplete_cholesky_decomposition_banded_faster()
+        else:
+            if sp.issparse(L):
+                L = L.tocsr()
+
+        self.error_history = []
+
+        tracemalloc.start()
+        start_time = time.process_time()
+
+        # Initial residual
+        r = b - A @ u
+
+        for k in range(self.max_iter):
+            # Relative residual ||r||_2 / ||f_h||_2
+            rel_res = np.sqrt(float(r.T @ r) / f_h_squared)
+            self.error_history.append(rel_res)
+
+            if rel_res <= self.tol:
+                print(
+                    f"IC-BIM converged in {k + 1} iterations with "
+                    f"relative residual {rel_res:.3e}."
+                )
+                break
+
+            # Solve M e = r with M = L L^T:
+            #   L y = r
+            #   L^T e = y
+            y = sp.linalg.spsolve_triangular(L, r, lower=True)
+            e = sp.linalg.spsolve_triangular(L.T, y, lower=False)
+
+            # Update iterate and residual
+            u = u + e
+            r = b - A @ u
+
+        else:
+            print("IC-BIM: maximum number of iterations reached without convergence.")
+
+        cpu_time = time.process_time() - start_time
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+
+        print(
+            f"IC-BIM iteration completed in {cpu_time:.4f} seconds, "
+            f"peak memory usage: {peak / 10 ** 6:.4f} MB"
+        )
+
+        return u, cpu_time, peak
+
     def solve(self, M=None, u0=None):
         """
         Solve the linear system Ax = b using the Conjugate Gradient method.
